@@ -20,6 +20,7 @@ enum DeviceState
 
 int DEVICE_MODE = DeviceState::Initializing;
 
+const uint8_t NUM_IO = 32;
 const uint8_t NUM_KEYS_B0 = 11;
 const uint8_t NUM_KEYS_B1 = 7;
 const uint8_t NUM_OCTAVE_KEYS = 5;
@@ -32,27 +33,41 @@ int button_pressed_cap_threshold = 0;
 
 // define input to keys
 // this should match the wiring you make.
-uint32_t io_keys_map[NUM_TOTAL_KEYS] = {
+uint32_t io_keys_map[NUM_IO] = {
     // board 0
-    0b000000000000100000, //p0
-    0b000000000001000000, //p1
-    0b000000000010000000, //p2
-    0b000000000100000000, //p3
-    0b000000001000000000, //p4
-    0b000000010000000000, //p5
-    0b000000000000010000, //p6
-    0b000000000000001000, //p7
-    0b000000000000000100, //p8
-    0b000000000000000010, //p9
-    0b000000000000000001, //p10
+    0b000000000000000000,
+    0b000000000000000000, //p0 // the first two pins are broken?
+    0b000000000000100000, //p1
+    0b000000000001000000, //p2
+    0b000000000010000000, //p3
+    0b000000000100000000, //p4
+    0b000000001000000000, //p5
+    0b000000010000000000, //p6
+    0b000000000000010000, //p7
+    0b000000000000001000, //p8
+    0b000000000000000100, //p9
+    0b000000000000000010, //p10
+    0b000000000000000001, //p11 unused
+    0b000000000000000000, //x12 
+    0b000000000000000000, //x13
+    0b000000000000000000, //x14
     // board 1
-    0b000000100000000000, //p0
+    0b000000100000000000, //p0 
     0b000001000000000000, //p1
     0b000010000000000000, //p2
     0b000100000000000000, //p3
     0b001000000000000000, //p4
     0b010000000000000000, //p5
-    0b100000000000000000  //p6
+    0b100000000000000000, //p6
+    0b000000000000000000, //p7
+    0b000000000000000000, //p8
+    0b000000000000000000, //p9
+    0b000000000000000000, //p10
+    0b000000000000000000, //p11
+    0b000000000000000000, //x12
+    0b000000000000000000, //x13
+    0b000000000000000000, //x14
+    0b000000000000000000  //x15
   };
 
 // define EWI fingerings
@@ -78,12 +93,13 @@ int32_t keys_notes_map[NUM_FINGERINGS][2] = {
     {0b0000000000000, pitchD4b},
     {0b0000100000000, pitchD4}};
 
-int32_t keys_octaves_map[NUM_OCTAVE_KEYS][2] = {
+const uint8_t NUM_OCTAVE_FINGERINGS = 5;
+int32_t keys_octaves_map[NUM_OCTAVE_FINGERINGS][2] = {
     {0b00000100, 0},
-    {0b00000000, 0},
-    {0b00000000, 0},
-    {0b00000000, 0},
-    {0b00000000, 0},
+    {0b00000010, -12},
+    {0b00000001, -24},
+    {0b00001000, 12},
+    {0b00010000, 24},
 };
 
 // define sensor -> key map
@@ -100,6 +116,7 @@ uint32_t m_last_keys_held = 0b0000000000000000;
 int16_t m_last_valid_note = 0;
 
 uint32_t m_allbuttons_held = 0;
+uint32_t testbit = 0;
 uint32_t m_allkeys_held = 0b0000000000000000;
 uint32_t m_octaves = 0;
 uint32_t m_buttons = 0;
@@ -111,6 +128,7 @@ int16_t note_value = 0;
 
 void setup()
 {
+  delay(1000);
   // set pins as input/output
   // start any communication steps
   Wire.begin();
@@ -122,6 +140,9 @@ void setup()
 
   BreathSensor.begin();
   BreathSensor.calibrate(50, 0, 100, 80);
+  
+  Serial.begin(115200);
+  Serial.println();
 }
 
 void loop()
@@ -132,19 +153,41 @@ void loop()
   breath_value = BreathSensor.read();
 
   // turn into logical values
-  m_allbuttons_held = ki(touched_b0, NUM_KEYS_B0) + (ki(touched_b1, NUM_KEYS_B1) << NUM_KEYS_B0);
+  m_allbuttons_held = touched_b0 + ((uint32_t) touched_b1 << 16);
+  #define DEBUG
+  #ifdef DEBUG
+  Serial.print(m_allbuttons_held + ((uint32_t) 1<<31), BIN);
+  Serial.print(" ");
+  #endif
   
   m_allkeys_held = 0;
   // map the IO to the keys in order
-  for (int i=0; i<NUM_TOTAL_KEYS; i++) {
-    m_allkeys_held += 0; // future me: figure out a magical way to do this using the button map
+  for (int i=0; i<NUM_IO; i++) {
+    testbit = (uint32_t) 1 << i;
+    if (m_allbuttons_held & testbit) {
+      m_allkeys_held += io_keys_map[i];
+    }
   }
+  
+  Serial.print(m_allkeys_held + ((uint32_t) 1<<31), BIN);
+  Serial.print(" ");
+  Serial.print(breath_value);
+  
   
   // filter octave out, get keys only
   m_octaves = ki(m_allkeys_held, NUM_OCTAVE_KEYS);
-  m_allkeys_held = ki(m_allkeys_held >> NUM_OCTAVE_KEYS, NUM_NOTE_KEYS);
+  m_allkeys_held = m_allkeys_held >> NUM_OCTAVE_KEYS;
 
   note_value = getNote(m_allkeys_held);
+  note_value = note_value + getOctave(m_octaves);
+  
+  Serial.print(" ");
+  Serial.print(m_allkeys_held + ((uint32_t) 1<<16), BIN);
+  Serial.print(" ");
+  Serial.print(note_value, DEC);
+  Serial.println();
+  delay(50);
+  return;
 }
 
 int ki(int input_touched, int number_interest)
@@ -158,8 +201,21 @@ int16_t getNote(uint32_t keys_held)
   {
     if (keys_held == (uint32_t) keys_notes_map[i][0])
     {
-      return keys_notes_map[i][1];
+      m_last_valid_note = keys_notes_map[i][1];
+      return m_last_valid_note;
     }
   }
   return m_last_valid_note;
+}
+
+int16_t getOctave(uint32_t keys_held)
+{
+  for (uint8_t i = 0; i < NUM_OCTAVE_FINGERINGS; i++)
+  {
+    if (keys_held == (uint32_t) keys_octaves_map[i][0])
+    {
+      return keys_octaves_map[i][1];
+    }
+  }
+  return 0;
 }
