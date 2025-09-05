@@ -110,10 +110,12 @@ Adafruit_MPR121 b1 = Adafruit_MPR121();
 uint8_t B_DATAPIN = 8;
 uint8_t B_CLOCKPIN = 9;
 HX710B BreathSensor(B_DATAPIN, B_CLOCKPIN);
+//HX711 BreathSensor;
 
 // loop-local definitions
 uint32_t m_last_keys_held = 0b0000000000000000;
-int16_t m_last_valid_note = 0;
+byte m_last_valid_note = 0;
+byte m_last_valid_breath = 0;
 
 uint32_t m_allbuttons_held = 0;
 uint32_t testbit = 0;
@@ -124,7 +126,17 @@ uint32_t m_buttons = 0;
 uint16_t touched_b0 = 0;
 uint16_t touched_b1 = 0;
 int32_t breath_value = 0;
-int16_t note_value = 0;
+
+byte breath_cc = 0;
+byte note_value = 0;
+bool note_playing = false;
+byte deadzone = 5;
+byte velocity = 64;
+
+byte easy_factor = 90;
+
+byte midi_channel = 5;
+byte midi_cc_channel = 0;
 
 void setup()
 {
@@ -137,9 +149,10 @@ void setup()
 
   b0.setAutoconfig(true);
   b1.setAutoconfig(true);
-
+  
   BreathSensor.begin();
-  BreathSensor.calibrate(50, 0, 100, 80);
+  //BreathSensor.begin(B_DATAPIN, B_CLOCKPIN);
+  //BreathSensor.calibrate(50, 0, 100, 80);
   
   Serial.begin(115200);
   Serial.println();
@@ -150,11 +163,14 @@ void loop()
   // read from inputs
   touched_b0 = b0.touched();
   touched_b1 = b1.touched();
-  breath_value = BreathSensor.read();
+  
+  //if (BreathSensor.wait_ready_retry(1,0)) {
+    breath_value = BreathSensor.read(true);
+  //}
 
   // turn into logical values
   m_allbuttons_held = touched_b0 + ((uint32_t) touched_b1 << 16);
-  #define DEBUG
+
   #ifdef DEBUG
   Serial.print(m_allbuttons_held + ((uint32_t) 1<<31), BIN);
   Serial.print(" ");
@@ -168,11 +184,15 @@ void loop()
       m_allkeys_held += io_keys_map[i];
     }
   }
-  
+  #ifdef DEBUG
   Serial.print(m_allkeys_held + ((uint32_t) 1<<31), BIN);
   Serial.print(" ");
-  Serial.print(breath_value);
+  #endif
   
+  
+  
+  breath_cc = map(breath_value, -8388610, 8388610, 0,255);
+  Serial.print(breath_cc);
   
   // filter octave out, get keys only
   m_octaves = ki(m_allkeys_held, NUM_OCTAVE_KEYS);
@@ -181,19 +201,42 @@ void loop()
   note_value = getNote(m_allkeys_held);
   note_value = note_value + getOctave(m_octaves);
   
+  #ifdef DEBUG
   Serial.print(" ");
   Serial.print(m_allkeys_held + ((uint32_t) 1<<16), BIN);
   Serial.print(" ");
   Serial.print(note_value, DEC);
+  #endif
   Serial.println();
-  delay(50);
+  
+  if (!note_playing && (breath_cc > 127 + deadzone || breath_cc < 127 - deadzone)) {
+    noteOn(midi_channel, note_value, velocity);
+    note_playing = true;
+  } else if (note_playing && note_value != m_last_valid_note) {
+    noteOff(midi_channel,m_last_valid_note,velocity);
+    noteOn(midi_channel, note_value, velocity);
+  } else if (note_playing && ! (breath_cc > 127 + deadzone || breath_cc < 127 - deadzone)) {
+    noteOff(midi_channel,m_last_valid_note,velocity);
+    note_playing = false;
+  }
+  
+  if (breath_cc != m_last_valid_breath){
+    // positive pressure
+    controlChange(midi_channel, midi_cc_channel, constrain(map(breath_cc, 127,255 - easy_factor,0,127),0,127));
+    // negative pressure
+    controlChange(midi_channel, midi_cc_channel+1, constrain(map(breath_cc, 127,0 + easy_factor,0,127),0,127));
+  }
+  
+
+  
+  MidiUSB.flush();
+  
+  m_last_valid_note = note_value;
+  m_last_valid_breath = breath_cc;
+  delay(1);
   return;
 }
 
-int ki(int input_touched, int number_interest)
-{
-  return (input_touched & ((1 << number_interest) - 1));
-}
 
 int16_t getNote(uint32_t keys_held)
 {
@@ -201,8 +244,7 @@ int16_t getNote(uint32_t keys_held)
   {
     if (keys_held == (uint32_t) keys_notes_map[i][0])
     {
-      m_last_valid_note = keys_notes_map[i][1];
-      return m_last_valid_note;
+      return keys_notes_map[i][1];
     }
   }
   return m_last_valid_note;
@@ -218,4 +260,24 @@ int16_t getOctave(uint32_t keys_held)
     }
   }
   return 0;
+}
+
+int ki(int input_touched, int number_interest)
+{
+  return (input_touched & ((1 << number_interest) - 1));
+}
+
+void controlChange(byte channel, byte control, byte value) {
+  midiEventPacket_t event = {0x0B, 0xB0 | channel, control, value};
+  MidiUSB.sendMIDI(event);
+}
+
+void noteOn(byte channel, byte pitch, byte velocity) {
+  midiEventPacket_t noteOn = {0x09, 0x90 | channel, pitch, velocity};
+  MidiUSB.sendMIDI(noteOn);
+}
+
+void noteOff(byte channel, byte pitch, byte velocity) {
+  midiEventPacket_t noteOff = {0x08, 0x80 | channel, pitch, velocity};
+  MidiUSB.sendMIDI(noteOff);
 }

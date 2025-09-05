@@ -245,7 +245,7 @@ public:
       clock_pulse();  //  27
     }
 
-    _lastTimeRead = millis();
+    //_lastTimeRead = millis();
     //  extend sign if needed
     if (_value & 0x800000) _value |= 0xFF000000;
     return _value;
